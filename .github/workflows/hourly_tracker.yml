@@ -24,13 +24,16 @@ jobs:
         run: pip install requests pandas
 
       - name: Run Tracker Script
-        # The '-u' flag forces Python to print logs immediately (Unbuffered)
+        # The '-u' flag forces Python to print logs immediately
         run: python -u main.py
 
       - name: Commit and Save Data
         run: |
           git config --global user.name "KalshiBot"
           git config --global user.email "bot@github.com"
-          git add kalshi_hourly_tracker.csv
-          # The line below prevents crashing if no changes occur
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update Market Data [skip ci]" && git push)
+          
+          # This line captures the new folder we created
+          git add market_data/*.csv
+          
+          # This commits the changes only if there is new data
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Add Data Batch [skip ci]" && git push)
