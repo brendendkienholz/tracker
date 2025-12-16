@@ -2,13 +2,15 @@ import requests
 import pandas as pd
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 TRACKING_FILE = "kalshi_hourly_tracker.csv"
 FEE_CENTS = 2
-MIN_LIQUIDITY_BID = 90
+MIN_PROBABILITY = 80  # 80¢ Floor
+MAX_PROBABILITY = 97  # 97¢ Cap
+HOURS_AHEAD = 48      # Only track markets closing in next 48h
 
 def polite_request(url, params=None):
     try:
@@ -33,8 +35,7 @@ def fetch_all_active_markets():
     print("  -> Fetching market pages...")
     
     while True:
-        # FIX: Use 'open' instead of 'active' for the filter
-        params = {"limit": 100, "status": "open"}
+        params = {"limit": 100, "status": "open"} 
         if cursor:
             params['cursor'] = cursor
             
@@ -50,7 +51,7 @@ def fetch_all_active_markets():
         all_markets.extend(markets)
         page_count += 1
         
-        # Diagnostic: Print progress so we know it's working
+        # Diagnostic print
         print(f"     Page {page_count}: Found {len(markets)} markets...")
         
         cursor = data.get('cursor')
@@ -63,7 +64,7 @@ def fetch_all_active_markets():
     return all_markets
 
 def run_hourly_cycle():
-    print(f"--- ⏳ Starting Deep Scan: {datetime.utcnow()} UTC ---")
+    print(f"--- ⏳ Starting Scan (Next {HOURS_AHEAD}h Only): {datetime.utcnow()} UTC ---")
     
     # 1. LOAD CSV
     if os.path.exists(TRACKING_FILE):
@@ -88,6 +89,8 @@ def run_hourly_cycle():
                     if result in ['yes', 'no']:
                         winner = result.upper()
                         did_win = (winner == row['fav_side'])
+                        
+                        # PnL Math
                         pnl = (100 - row['entry_cost']) - FEE_CENTS if did_win else -row['entry_cost'] - FEE_CENTS
                         
                         df.at[index, 'status'] = 'SETTLED'
@@ -95,37 +98,56 @@ def run_hourly_cycle():
                         df.at[index, 'pnl'] = pnl
                         print(f"  -> Settled {ticker}: {winner} (PnL: {pnl}¢)")
 
-    # 3. SCAN ALL MARKETS
+    # 3. SCAN FOR NEW TRADES
     markets = fetch_all_active_markets()
     
     new_rows = []
     now = datetime.utcnow()
+    # Define the cutoff time (Now + 48 Hours)
+    time_limit = now + timedelta(hours=HOURS_AHEAD)
     
     for m in markets:
         ticker = m['ticker']
         if ticker in df['ticker'].values: continue
         
+        # --- TIME FILTER ---
+        close_str = m.get('close_time')
+        if not close_str: continue # Skip if no date
+        
+        # Parse date safely
+        try:
+            close_date = pd.to_datetime(close_str).replace(tzinfo=None)
+        except:
+            continue
+            
+        # The 48-Hour Check
+        if close_date > time_limit:
+            continue # Skip if it closes too far in the future
+        
+        if close_date < now:
+            continue # Skip if it's already closed
+            
+        # --- PRICE FILTER ---
         yes_bid = m.get('yes_bid', 0)
         yes_ask = m.get('yes_ask', 0)
         
         fav = ""
         cost = 0
         
-        if yes_bid >= MIN_LIQUIDITY_BID:
+        if yes_bid >= MIN_PROBABILITY:
             fav = "YES"
             cost = yes_ask
-        elif yes_bid <= (100 - MIN_LIQUIDITY_BID):
+        elif yes_bid <= (100 - MIN_PROBABILITY):
             fav = "NO"
             cost = 100 - yes_bid 
         else:
             continue 
         
-        if cost < 90: continue
-        
-        close_str = m.get('close_time')
-        close_date = pd.to_datetime(close_str).replace(tzinfo=None) if close_str else "Unknown"
+        # 80-97 Filter
+        if cost < MIN_PROBABILITY or cost > MAX_PROBABILITY: 
+            continue
 
-        print(f"  [+] Tracking: {m['title'][:40]}... ({fav} @ {cost}¢)")
+        print(f"  [+] Tracking: {m['title'][:40]}... ({fav} @ {cost}¢) | Closes: {close_date.strftime('%m-%d %H:%M')}")
         new_rows.append({
             'ticker': ticker,
             'question': m['title'],
@@ -141,9 +163,9 @@ def run_hourly_cycle():
     # 4. SAVE
     if new_rows:
         df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-        print(f"  -> Added {len(new_rows)} new markets.")
+        print(f"  -> Added {len(new_rows)} new short-term markets.")
     else:
-        print("  -> No new favorites found in this scan.")
+        print("  -> No new opportunities found in the next 48h.")
         
     df.to_csv(TRACKING_FILE, index=False)
     print("Cycle Complete. CSV updated.")
