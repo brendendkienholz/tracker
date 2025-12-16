@@ -6,7 +6,7 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-DATA_FOLDER = "market_data"  # Stores daily files
+DATA_FOLDER = "market_data"
 
 def polite_request(url, params=None):
     try:
@@ -59,7 +59,7 @@ def fetch_all_active_markets():
 
 def run_binary_hoarder():
     now = datetime.utcnow()
-    print(f"--- 🚜 Starting Binary Data Hoard: {now} UTC ---")
+    print(f"--- 🚜 Starting Binary Data Hoard (v2): {now} UTC ---")
     
     if not os.path.exists(DATA_FOLDER):
         os.makedirs(DATA_FOLDER)
@@ -68,34 +68,35 @@ def run_binary_hoarder():
     snapshot_rows = []
     
     for m in markets:
-        # --- BINARY FILTER ---
-        # We only want markets that have clean Yes/No prices.
-        # If 'yes_bid' or 'yes_ask' is missing, it's not a tradeable binary market for us.
-        if 'yes_bid' not in m or 'yes_ask' not in m:
-            continue
+        if 'yes_bid' not in m or 'yes_ask' not in m: continue
             
         yes_bid = m.get('yes_bid', 0)
         yes_ask = m.get('yes_ask', 0)
-        
-        # Skip "Dead" markets (Price 0 or 100) - No signal there for ML
-        # (Optional: You can remove this if you want to study dead markets)
         if yes_bid == 0 and yes_ask == 0: continue
 
-        # --- FEATURE ENGINEERING ---
-        # Calculate these NOW so we don't have to do it later
         spread = yes_ask - yes_bid
         midpoint = (yes_ask + yes_bid) / 2
         
+        # --- NEW: EXTRACT CATEGORY ---
+        # Kalshi usually sends a 'category' field. 
+        # If missing, we default to 'Uncategorized'.
+        category = m.get('category', 'Uncategorized')
+        
+        # We also grab the 'ticker' prefix (e.g., 'KX' or 'INX') which often hints at the type
+        ticker_parts = m['ticker'].split('-')
+        ticker_class = ticker_parts[0] if ticker_parts else 'UNKNOWN'
+
         snapshot_rows.append({
             'timestamp': now,
             'ticker': m['ticker'],
-            'question': m['title'],
+            'category': category,          # <--- NEW COLUMN
+            'class': ticker_class,         # <--- NEW COLUMN (e.g. "FED", "INX")
             'yes_bid': yes_bid,
             'yes_ask': yes_ask,
-            'spread': spread,              # Feature 1: Liquidity Cost
-            'midpoint': midpoint,          # Feature 2: "True" Price
-            'volume': m.get('volume', 0),  # Feature 3: Activity
-            'open_interest': m.get('open_interest', 0), # Feature 4: Market Depth
+            'spread': spread,
+            'midpoint': midpoint,
+            'volume': m.get('volume', 0),
+            'open_interest': m.get('open_interest', 0),
             'close_date': m.get('close_time')
         })
         
@@ -103,7 +104,7 @@ def run_binary_hoarder():
         print("No valid binary markets found.")
         return
 
-    # --- SAVE TO DAILY FILE ---
+    # --- SAVE ---
     date_str = now.strftime('%Y-%m-%d')
     filename = f"{DATA_FOLDER}/{date_str}.csv"
     
