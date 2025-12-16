@@ -59,7 +59,7 @@ def fetch_all_active_markets():
 
 def run_binary_hoarder():
     now = datetime.utcnow()
-    print(f"--- 🚜 Starting Binary Data Hoard (v2): {now} UTC ---")
+    print(f"--- 🚜 Starting Binary Data Hoard (v3): {now} UTC ---")
     
     if not os.path.exists(DATA_FOLDER):
         os.makedirs(DATA_FOLDER)
@@ -68,43 +68,55 @@ def run_binary_hoarder():
     snapshot_rows = []
     
     for m in markets:
+        # 1. BINARY FILTER: Must have valid Yes/No prices
         if 'yes_bid' not in m or 'yes_ask' not in m: continue
             
         yes_bid = m.get('yes_bid', 0)
         yes_ask = m.get('yes_ask', 0)
+        
+        # Skip "Dead" markets (Price 0 or 100) - No signal there for ML
         if yes_bid == 0 and yes_ask == 0: continue
 
+        # 2. FEATURE ENGINEERING
         spread = yes_ask - yes_bid
         midpoint = (yes_ask + yes_bid) / 2
         
-        # --- NEW: EXTRACT CATEGORY ---
-        # Kalshi usually sends a 'category' field. 
-        # If missing, we default to 'Uncategorized'.
+        # Calculate Time to Close (Critical for ML)
+        close_str = m.get('close_time')
+        hours_left = 0
+        if close_str:
+            try:
+                close_dt = datetime.strptime(close_str, "%Y-%m-%dT%H:%M:%SZ")
+                delta = close_dt - now
+                hours_left = delta.total_seconds() / 3600
+            except:
+                hours_left = -1
+
+        # Extract Category & Class
         category = m.get('category', 'Uncategorized')
-        
-        # We also grab the 'ticker' prefix (e.g., 'KX' or 'INX') which often hints at the type
         ticker_parts = m['ticker'].split('-')
         ticker_class = ticker_parts[0] if ticker_parts else 'UNKNOWN'
 
         snapshot_rows.append({
             'timestamp': now,
             'ticker': m['ticker'],
-            'category': category,          # <--- NEW COLUMN
-            'class': ticker_class,         # <--- NEW COLUMN (e.g. "FED", "INX")
+            'category': category,          # Feature: Market Type (Crypto, Politics)
+            'class': ticker_class,         # Feature: Sub-Type (BTC, FED)
+            'hours_to_close': round(hours_left, 2), # Feature: Time Decay
             'yes_bid': yes_bid,
             'yes_ask': yes_ask,
-            'spread': spread,
-            'midpoint': midpoint,
-            'volume': m.get('volume', 0),
-            'open_interest': m.get('open_interest', 0),
-            'close_date': m.get('close_time')
+            'spread': spread,              # Feature: Liquidity Cost
+            'midpoint': midpoint,          # Feature: "True" Price
+            'volume': m.get('volume', 0),  # Feature: Activity
+            'open_interest': m.get('open_interest', 0), # Feature: Depth
+            'close_date': close_str
         })
         
     if not snapshot_rows:
         print("No valid binary markets found.")
         return
 
-    # --- SAVE ---
+    # 3. SAVE TO DAILY FILE
     date_str = now.strftime('%Y-%m-%d')
     filename = f"{DATA_FOLDER}/{date_str}.csv"
     
