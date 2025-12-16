@@ -14,7 +14,8 @@ HOURS_AHEAD = 48      # Only track markets closing in next 48h
 
 def polite_request(url, params=None):
     try:
-        r = requests.get(url, params=params, headers={"User-Agent": "GitHubActionBot/1.0"})
+        # TIMEOUT ADDED: Prevents the script from hanging forever
+        r = requests.get(url, params=params, headers={"User-Agent": "GitHubActionBot/1.0"}, timeout=10)
         if r.status_code == 200: 
             return r.json()
         elif r.status_code == 429:
@@ -112,9 +113,8 @@ def run_hourly_cycle():
         
         # --- TIME FILTER ---
         close_str = m.get('close_time')
-        if not close_str: continue # Skip if no date
+        if not close_str: continue 
         
-        # Parse date safely
         try:
             close_date = pd.to_datetime(close_str).replace(tzinfo=None)
         except:
@@ -122,10 +122,10 @@ def run_hourly_cycle():
             
         # The 48-Hour Check
         if close_date > time_limit:
-            continue # Skip if it closes too far in the future
+            continue 
         
         if close_date < now:
-            continue # Skip if it's already closed
+            continue 
             
         # --- PRICE FILTER ---
         yes_bid = m.get('yes_bid', 0)
