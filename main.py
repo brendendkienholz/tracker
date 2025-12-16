@@ -13,19 +13,19 @@ MIN_LIQUIDITY_BID = 90
 def polite_request(url, params=None):
     try:
         r = requests.get(url, params=params, headers={"User-Agent": "GitHubActionBot/1.0"})
-        if r.status_code == 200: return r.json()
+        if r.status_code == 200: 
+            return r.json()
         elif r.status_code == 429:
             print("  [!] Rate limit. Sleeping 1s...")
             time.sleep(1)
-            return polite_request(url, params) # Retry
+            return polite_request(url, params)
+        else:
+            print(f"  [!] API Error {r.status_code}: {r.text[:100]}")
     except Exception as e:
         print(f"Connection Error: {e}")
     return None
 
 def fetch_all_active_markets():
-    """
-    Fetches ALL active markets using pagination (cursor).
-    """
     all_markets = []
     cursor = None
     page_count = 0
@@ -33,7 +33,8 @@ def fetch_all_active_markets():
     print("  -> Fetching market pages...")
     
     while True:
-        params = {"limit": 100, "status": "active"}
+        # FIX: Use 'open' instead of 'active' for the filter
+        params = {"limit": 100, "status": "open"}
         if cursor:
             params['cursor'] = cursor
             
@@ -49,12 +50,14 @@ def fetch_all_active_markets():
         all_markets.extend(markets)
         page_count += 1
         
-        # Check if there is a next page
+        # Diagnostic: Print progress so we know it's working
+        print(f"     Page {page_count}: Found {len(markets)} markets...")
+        
         cursor = data.get('cursor')
         if not cursor:
             break
             
-        time.sleep(0.2) # Be polite to API
+        time.sleep(0.2) 
         
     print(f"  -> Scanned {page_count} pages. Total markets found: {len(all_markets)}")
     return all_markets
@@ -69,7 +72,30 @@ def run_hourly_cycle():
         df = pd.DataFrame(columns=['ticker', 'question', 'fav_side', 'entry_cost', 
                                    'status', 'open_date', 'close_date', 'result', 'pnl'])
 
-    # 2. SCAN ALL ACTIVE MARKETS
+    # 2. RESOLVE PENDING
+    pending_mask = df['status'] == 'PENDING'
+    if pending_mask.any():
+        print(f"Checking {pending_mask.sum()} pending markets...")
+        for index, row in df[pending_mask].iterrows():
+            ticker = row['ticker']
+            url = f"{BASE_URL}/markets/{ticker}"
+            data = polite_request(url)
+            
+            if data:
+                m = data.get('market', {})
+                if m.get('status') == 'settled':
+                    result = m.get('result')
+                    if result in ['yes', 'no']:
+                        winner = result.upper()
+                        did_win = (winner == row['fav_side'])
+                        pnl = (100 - row['entry_cost']) - FEE_CENTS if did_win else -row['entry_cost'] - FEE_CENTS
+                        
+                        df.at[index, 'status'] = 'SETTLED'
+                        df.at[index, 'result'] = winner
+                        df.at[index, 'pnl'] = pnl
+                        print(f"  -> Settled {ticker}: {winner} (PnL: {pnl}¢)")
+
+    # 3. SCAN ALL MARKETS
     markets = fetch_all_active_markets()
     
     new_rows = []
@@ -77,11 +103,8 @@ def run_hourly_cycle():
     
     for m in markets:
         ticker = m['ticker']
-        
-        # Skip if already tracking
         if ticker in df['ticker'].values: continue
         
-        # Strategy Logic
         yes_bid = m.get('yes_bid', 0)
         yes_ask = m.get('yes_ask', 0)
         
@@ -99,7 +122,6 @@ def run_hourly_cycle():
         
         if cost < 90: continue
         
-        # Capture close time
         close_str = m.get('close_time')
         close_date = pd.to_datetime(close_str).replace(tzinfo=None) if close_str else "Unknown"
 
@@ -116,12 +138,12 @@ def run_hourly_cycle():
             'pnl': 0
         })
 
-    # 3. SAVE
+    # 4. SAVE
     if new_rows:
         df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
         print(f"  -> Added {len(new_rows)} new markets.")
     else:
-        print("  -> No new favorites found (but we scanned everything!).")
+        print("  -> No new favorites found in this scan.")
         
     df.to_csv(TRACKING_FILE, index=False)
     print("Cycle Complete. CSV updated.")
