@@ -3,10 +3,10 @@ name: Hourly Kalshi Tracker
 on:
   schedule:
     - cron: '0 * * * *'  # Runs at minute 0 of every hour
-  workflow_dispatch:      # This enables the "Run workflow" button
+  workflow_dispatch:      # Allows manual trigger
 
 permissions:
-  contents: write         # Permission to save the CSV back to the repo
+  contents: write
 
 jobs:
   track-markets:
@@ -24,12 +24,13 @@ jobs:
         run: pip install requests pandas
 
       - name: Run Tracker Script
-        run: python main.py
+        # The '-u' flag forces Python to print logs immediately (Unbuffered)
+        run: python -u main.py
 
       - name: Commit and Save Data
         run: |
           git config --global user.name "KalshiBot"
           git config --global user.email "bot@github.com"
           git add kalshi_hourly_tracker.csv
-          # The line below prevents the bot from crashing if there are no new changes to save
+          # The line below prevents crashing if no changes occur
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update Market Data [skip ci]" && git push)
