@@ -3,10 +3,10 @@ name: Hourly Kalshi Tracker
 on:
   schedule:
     - cron: '0 * * * *'  # Runs at minute 0 of every hour
-  workflow_dispatch:      # Allows you to click "Run Now" manually to test it
+  workflow_dispatch:      # This enables the "Run workflow" button
 
 permissions:
-  contents: write         # Gives the bot permission to save the CSV back to the repo
+  contents: write         # Permission to save the CSV back to the repo
 
 jobs:
   track-markets:
@@ -31,5 +31,5 @@ jobs:
           git config --global user.name "KalshiBot"
           git config --global user.email "bot@github.com"
           git add kalshi_hourly_tracker.csv
-          # Only commit if data changed to avoid empty commit errors
+          # The line below prevents the bot from crashing if there are no new changes to save
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update Market Data [skip ci]" && git push)
