@@ -1,0 +1,35 @@
+name: Hourly Kalshi Tracker
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Runs at minute 0 of every hour
+  workflow_dispatch:      # Allows you to click "Run Now" manually to test it
+
+permissions:
+  contents: write         # Gives the bot permission to save the CSV back to the repo
+
+jobs:
+  track-markets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Libraries
+        run: pip install requests pandas
+
+      - name: Run Tracker Script
+        run: python main.py
+
+      - name: Commit and Save Data
+        run: |
+          git config --global user.name "KalshiBot"
+          git config --global user.email "bot@github.com"
+          git add kalshi_hourly_tracker.csv
+          # Only commit if data changed to avoid empty commit errors
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update Market Data [skip ci]" && git push)
